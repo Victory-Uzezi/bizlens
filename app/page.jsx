@@ -49,7 +49,7 @@ const PIE_COLORS = ["#E8C67A","#60A5FA","#4ADE80","#F87171","#A78BFA","#FBBF24",
 
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
 async function askClaude(messages, systemPrompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
