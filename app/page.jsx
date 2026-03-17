@@ -44,13 +44,13 @@ const FILE_TYPES = [
 const PIE_COLORS = ["#E8C67A","#60A5FA","#4ADE80","#F87171","#A78BFA","#FBBF24","#34D399","#FB923C","#E879F9","#22D3EE"];
 
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
-async function askClaude(messages, systemPrompt) {
+async function askClaude(messages, systemPrompt, max_tokens = 1500) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 1500,
+      max_tokens,
       system: systemPrompt,
       messages,
     }),
@@ -345,36 +345,50 @@ function PersonalBankTab({ sharedData, setSharedData }) {
           reader.readAsDataURL(file);
         });
 
-        const sys = `You are a bank statement parser. Extract ALL transactions from this bank statement PDF and return ONLY a valid JSON array. No explanation, no markdown, no code blocks — just the raw JSON array.
+        const sys = `You are a bank statement parser. Extract ALL transactions from this PDF and return ONLY a valid JSON array with no explanation, no markdown, no code blocks.
 
-Each transaction object must have exactly these fields:
-- "date": string (the transaction date as written, e.g. "03/10/2026 07:10:50 PM")
-- "desc": string (the full transaction description/narration)
-- "amount": number (positive for money received/credited, negative for money sent/debited)
-- "balance": number or null (running balance if shown)
+Each object must have:
+- "date": string
+- "desc": string  
+- "amount": number (positive = money in, negative = money out)
+- "balance": number or null
 
-Rules:
-- Money In / Credit / Received = positive number
-- Money Out / Debit / Sent = negative number  
-- Include every single transaction, do not skip any
-- If a field is missing, use null for balance and empty string for desc
-- Return ONLY the JSON array starting with [ and ending with ]`;
+Return ONLY the JSON array. Start your response with [ and end with ]`;
 
         const reply = await askClaude([{
           role: "user",
           content: [
             { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-            { type: "text", text: "Extract all transactions from this bank statement as a JSON array." }
+            { type: "text", text: "Extract all transactions as a JSON array. Return only the JSON array starting with [ and ending with ]" }
           ]
-        }], sys);
+        }], sys, 4000);
 
-        // Clean and parse JSON
-        const cleaned = reply.replace(/```json|```/g, "").trim();
-        const start = cleaned.indexOf("[");
-        const end = cleaned.lastIndexOf("]");
-        if (start === -1 || end === -1) throw new Error("AI could not extract transactions from this PDF.");
-        const parsed = JSON.parse(cleaned.slice(start, end + 1));
-        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("No transactions found in PDF.");
+        // Robust JSON extraction — handle any wrapping the AI adds
+        let jsonStr = reply
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/```\s*$/i, "")
+          .trim();
+
+        // Find the array boundaries
+        const start = jsonStr.indexOf("[");
+        const end   = jsonStr.lastIndexOf("]");
+
+        if (start === -1 || end === -1) {
+          // Show first 300 chars of reply for debugging
+          throw new Error(`Could not find JSON in AI response. AI said: ${reply.slice(0, 200)}`);
+        }
+
+        let parsed;
+        try {
+          parsed = JSON.parse(jsonStr.slice(start, end + 1));
+        } catch (parseErr) {
+          throw new Error(`JSON parse failed: ${parseErr.message}. Response started with: ${jsonStr.slice(start, start + 100)}`);
+        }
+
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error("No transactions found in PDF.");
+        }
 
         transactions = parsed.map(t => ({
           date: t.date || "",
